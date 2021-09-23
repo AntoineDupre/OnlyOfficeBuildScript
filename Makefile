@@ -7,4 +7,5 @@ build:
 	docker build -t onlyoffice_builder -f Dockerfile .
 
 compile:
+	mkdir -p output
 	docker run -it -v $(PWD)/DocumentServer:/onlyoffice -v $(PWD)/output:/var/www/ onlyoffice_builder
