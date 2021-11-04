@@ -17,8 +17,13 @@ from wsproto.events import (
 import aiohttp_cors
 import sockjs
 
-host = "192.168.1.54"
-port = 8080
+docserver_host = "localhost"
+docserver_port = 8000
+docid = "305276599151020007"
+doc_serv_dir = "./DocumentServer/build_tools/out/linux_64/onlyoffice/documentserver"
+
+client_interface = "0.0.0.0"
+client_interface_port = 8001
 
 
 class DocServerInterface:
@@ -56,7 +61,6 @@ class DocServerInterface:
         self.writer.write(data)
         await self.writer.drain()
         logging.debug("Sent")
-
 
     async def _recieve_from_docserver(self):
         """ Read data from the docserver ws """
@@ -134,7 +138,13 @@ def run_app():
     from_ooclient_to_docserver = asyncio.Queue()
     from_docserver_to_ooclient = asyncio.Queue()
     # Create doc server interface
-    doc_interface = DocServerInterface("localhost", 8000, "/doc/-5365490046783702160/c", from_docserver_to_ooclient , app)
+    doc_interface = DocServerInterface(
+        docserver_host,
+        docserver_port,
+        f"/doc/{docid}/c",
+        from_docserver_to_ooclient,
+        app,
+    )
 
     # Setup server interface for onlyoffice client
     async def msg_handler(msg, session):
@@ -161,11 +171,10 @@ def run_app():
         except ValueError as e:
             pass
 
-    doc_serv_dir = "./DocumentServer/build_tools/out/linux_64/onlyoffice/documentserver"
-    statics = [ "/fonts", "/sdkjs", "/web-apps", "/sdkjs-plugins", "/dictionaries"]
+    statics = ["/fonts", "/sdkjs", "/web-apps", "/sdkjs-plugins", "/dictionaries"]
     for route in statics:
         app.router.add_routes([web.static(route, doc_serv_dir + route)])
-    app.router.add_routes([web.static('/info', doc_serv_dir + '/server/info')])
+    app.router.add_routes([web.static("/info", doc_serv_dir + "/server/info")])
 
     # Background task
     async def docserver_event_loop():
@@ -186,11 +195,15 @@ def run_app():
             read = await from_docserver_to_ooclient.get()
             logging.debug("Forwarding docserver message")
             from_docserver_to_ooclient.task_done()
-            manager = sockjs.get_manager("TEST", app)
-            if len(read) > 1:
-                manager.broadcast(read[1:])
+            notify_client(read)
 
-
+    def notify_client(message):
+        if len(message) <= 1 or message[0] != "a":
+            return
+        manager = sockjs.get_manager("TEST", app)
+        for session in manager.values():
+            if not session.expired:
+                session.send_frame(message)
 
     loop = asyncio.get_event_loop()
     doc_server_task = loop.create_task(docserver_event_loop())
@@ -199,7 +212,7 @@ def run_app():
 
     # Start ws server
     handler = app.make_handler(debug=True)
-    f = loop.create_server(handler, "0.0.0.0", 8001)
+    f = loop.create_server(handler, client_interface, client_interface_port)
     srv = loop.run_until_complete(f)
     try:
         loop.run_forever()
